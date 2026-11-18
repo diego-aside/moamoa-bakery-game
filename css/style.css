@@ -205,3 +205,17 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* v3: 손님 인내심·팁·상점 */
+.patrow { display: flex; align-items: center; gap: 8px; min-height: 30px; margin-top: 2px; }
+.pface { font-size: 24px; line-height: 1; flex: none; width: 30px; text-align: center; }
+.patrow .gauge.pat { flex: 1; height: 16px; margin: 0; background: rgba(32, 32, 34, .3); box-shadow: 0 0 0 2px var(--white); }
+.gauge.pat { position: relative; }
+.gauge.pat > i { position: absolute; left: 0; right: 0; top: 0; width: auto; height: 16px; transform: scaleX(1); background: #4F8A4B; transition: transform .25s linear; }
+.btn.mini { min-height: var(--tap); padding: 0 12px; font-size: 14px; border-radius: 14px; flex: none; }
+.ministars { color: #D9A21B; letter-spacing: 2px; margin-left: auto; font-size: 15px; }
+.axis .ministars { padding-left: 6px; }
+.tipline { margin-top: 6px; font-size: 18px; font-weight: 800; color: #8A5A12; }
+.goalmsg { color: var(--forest); }
+.stamp.att.on { border-color: var(--forest); background: #E4EFDD; }
+.shopitem { display: flex; flex-direction: column; gap: 10px; }

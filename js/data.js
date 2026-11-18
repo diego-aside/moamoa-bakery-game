@@ -6,13 +6,15 @@
  *   - shape 가 있으면 shapeKind: 'stretch'(길게 늘리기) | 'pan'(틀에 넣기)
  *   - art: 'saltbread' | 'loaf' | 'roll' (그림 종류. 사진이 생기면 PHOTOS 에 등록)
  * 잠긴 메뉴는 id, cat, name, open:false 만 있으면 도감에 '곧 만나요'로 보인다.
+ * 모카소금빵처럼 데이터가 다 있는데 open:false 인 메뉴는 앱의 출석 스탬프 해금(app.js UNLOCKS)으로 열린다.
+ * 손님(CUSTOMERS)의 fav 는 그 손님이 좋아하는 빵 id 다.
  * 이 파일에는 재료의 양·온도·시간 같은 숫자를 쓰지 않는다.
  */
 (function () {
   'use strict';
 
   var STORE = {
-    name: '모아모아베이커리 2호점',
+    name: '모아모아베이커리',
     address: '안양 동안구 관악대로 255 CS타워 202호'
   };
 
@@ -52,7 +54,20 @@
       ],
       decoy: { id: 'chestnut', icon: '🌰', name: '밤', why: '다른 빵에 어울리는 재료예요' }
     },
-    { id: 'mocha-salt', cat: 'salt', name: '모카소금빵', open: false },
+    {
+      id: 'mocha-salt', cat: 'salt', name: '모카소금빵', open: false,
+      desc: '쌉싸름한 모카 향에 짭조름함이 더해져요.',
+      wish: ['쌉싸름하고 고소한 빵 있어요?', '커피 향이 나는 짭조름한 빵이 당겨요.'],
+      hint: '모카소금빵',
+      actions: ['shape', 'bake'], shapeKind: 'stretch', art: 'saltbread',
+      ingredients: [
+        { id: 'rice', icon: '🌾', name: '쌀가루', why: '쌀로 빚어 쫄깃한 바탕을 만들어요' },
+        { id: 'sbutter', icon: '🧈', name: '소금버터', why: '짭조름한 끝맛을 더해줘요' },
+        { id: 'coffee', icon: '☕', name: '커피', why: '쌉싸름한 모카 향을 내줘요' },
+        { id: 'choco', icon: '🍫', name: '초콜릿', why: '달콤함이 쌉싸름함과 잘 어울려요' }
+      ],
+      decoy: { id: 'chestnut', icon: '🌰', name: '밤', why: '다른 빵에 어울리는 재료예요' }
+    },
     { id: 'mentai-salt', cat: 'salt', name: '명란소금빵', open: false },
     { id: 'chestnut-loaf', cat: 'loaf', name: '보늬밤 쌀식빵', open: false },
     { id: 'chestnut-baguette', cat: 'loaf', name: '보늬밤 그릭바게트', open: false },
@@ -73,7 +88,7 @@
    * 대사는 맛·식감·기분 범위 안에서만 쓴다. */
   var CUSTOMERS = [
     {
-      id: 'halmoni', name: '단골 할머니', tag: '동네 단골',
+      id: 'halmoni', name: '단골 할머니', tag: '동네 단골', fav: 'rice-salt',
       look: { skin: '#F1D2B6', hair: '#D8D6D2', hairStyle: 'bun', cloth: '#8E6AA8', extra: 'glasses' },
       greet: '안녕하세요, 오늘도 왔어요.',
       order: '{wish} 허허, 있으려나 모르겠네요.',
@@ -84,7 +99,7 @@
       }
     },
     {
-      id: 'mom', name: '아이와 온 엄마', tag: '아이 손 잡고',
+      id: 'mom', name: '아이와 온 엄마', tag: '아이 손 잡고', fav: 'rice-loaf',
       look: { skin: '#F4D9C2', hair: '#5A3B2A', hairStyle: 'ponytail', cloth: '#E58E7A', extra: 'child' },
       greet: '안녕하세요! 아이랑 같이 왔어요.',
       order: '아이가 먹을 거예요. {wish}',
@@ -95,7 +110,7 @@
       }
     },
     {
-      id: 'worker', name: '출근길 직장인', tag: '아침 단골',
+      id: 'worker', name: '출근길 직장인', tag: '아침 단골', fav: 'mocha-salt',
       look: { skin: '#EBC6A6', hair: '#2A2A2E', hairStyle: 'short', cloth: '#3C5A7A', extra: 'bag' },
       greet: '좋은 아침이에요. 출근길에 들렀어요.',
       order: '빨리 가야 해서요. {wish}',
@@ -106,7 +121,7 @@
       }
     },
     {
-      id: 'window', name: '창가 바 단골', tag: '창가 자리',
+      id: 'window', name: '창가 바 단골', tag: '창가 자리', fav: 'rice-salt',
       look: { skin: '#F0CDB0', hair: '#7A4A2A', hairStyle: 'beanie', cloth: '#345433', extra: 'phones' },
       greet: '안녕하세요. 창가 자리 비어 있죠?',
       order: '창가에 앉아서 먹을 거예요. {wish}',

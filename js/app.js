@@ -9,12 +9,31 @@
   var app = document.getElementById('app');
   var KEY = 'moamoa-save-v1';
   var RUN_LEN = 3;            // 하루 손님 수
-  var STAMP_GOAL = 7;         // 일주일 단골 배지에 필요한 스탬프
+  var STAMP_GOAL = 7;         // 일주일 단골 배지에 필요한 별 도장
+  var ATTEND_GOAL = 3;        // 출석 스탬프가 이만큼 모이면 모카소금빵이 열린다
+  var UNLOCKS = { 'mocha-salt': ATTEND_GOAL };   // 빵 id → 필요한 출석 스탬프 수
+  var GOAL_BONUS = 20;        // 일일 목표를 채우면 받는 보너스 코인
+  var SAMPLE_GAIN = 0.35;     // 시식 권유로 되찾는 인내심(가득 찬 상태 기준 비율)
+  // 일일 목표 6개: 날짜 해시로 하루에 하나를 고른다. key 는 진행을 올려 주는 사건 이름
+  var GOALS = [
+    { id: 'served', key: 'served', n: 3, text: '손님 3명 서빙하기' },
+    { id: 'golden', key: 'golden', n: 2, text: '노릇한 빵 2개 굽기' },
+    { id: 'tips', key: 'tips', n: 30, text: '팁 30코인 모으기' },
+    { id: 'stars', key: 'stars', n: 7, text: '별 7개 모으기' },
+    { id: 'calm', key: 'calm', n: 2, text: '손님이 느긋할 때 2번 서빙하기' },
+    { id: 'three', key: 'three', n: 1, text: '별 3개 빵 1개 만들기' }
+  ];
+  // 작은 상점: 딱 2개. price[단계] = 다음 단계의 가격(단계가 오를수록 비싸다)
+  var SHOP = {
+    oven: { icon: '🔥', name: '빠른 오븐', desc: '굽기에서 노릇한 구간이 넓어져요.', price: [30, 60] },
+    counter: { icon: '🪑', name: '편한 카운터', desc: '손님이 천천히 지쳐요.', price: [30, 60] }
+  };
 
   /* ───────── 1) 저장 ───────── */
   function defSave() {
     return { v: 1, dayNo: 1, stars: 0, heart: 0, dex: {}, stamps: [], runsToday: {}, run: null,
-      lastDay: null, noticeSeen: false, settings: { sound: true, xmas: null } };
+      lastDay: null, noticeSeen: false, settings: { sound: true, xmas: null },
+      coins: 0, up: { oven: 0, counter: 0 }, goals: {}, attend: [], unlocked: {}, sampleDay: null };
   }
   function loadSave() {
     var base = defSave();
@@ -24,6 +43,12 @@
         var o = JSON.parse(raw);
         var merged = Object.assign(base, o);
         merged.settings = Object.assign(defSave().settings, o.settings || {});
+        // v3 새 필드: 옛 저장 파일에 없으면 기본값으로 채워 이어한다
+        merged.up = Object.assign({ oven: 0, counter: 0 }, o.up || {});
+        if (!Array.isArray(merged.attend)) { merged.attend = []; }
+        if (!merged.goals || typeof merged.goals !== 'object') { merged.goals = {}; }
+        if (!merged.unlocked || typeof merged.unlocked !== 'object') { merged.unlocked = {}; }
+        if (typeof merged.coins !== 'number' || merged.coins < 0) { merged.coins = 0; }
         return merged;
       }
     } catch (e) { /* 저장소를 못 쓰면 이번 접속 동안만 기억한다 */ }
@@ -46,7 +71,11 @@
     for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
     return h >>> 0;
   }
-  function openBreads() { return D.BREADS.filter(function (b) { return b.open; }); }
+  // 빵이 열렸는지: 데이터의 open 이거나, 출석 스탬프로 해금된 빵(저장 상태 기준)
+  function isOpen(b) {
+    return !!(b.open || save.unlocked[b.id] || (UNLOCKS[b.id] && save.attend.length >= UNLOCKS[b.id]));
+  }
+  function openBreads() { return D.BREADS.filter(isOpen); }
   function breadById(id) { return D.BREADS.filter(function (b) { return b.id === id; })[0]; }
   function custById(id) { return D.CUSTOMERS.filter(function (c) { return c.id === id; })[0]; }
   function breadOn(ds) { var o = openBreads(); return o[hash(ds + 'bread') % o.length]; }
@@ -282,6 +311,8 @@
     if (cleanup) { cleanup(); cleanup = null; }
     app.innerHTML = '<div class="scene">' + scene + '</div><div class="ui">' + ui + '</div>';
     if (bind) { bind(app); }
+    on('[data-act="sample"]', sampleOffer);
+    patUi();
   }
   function $(sel, root) { return (root || app).querySelector(sel); }
   function on(sel, fn, root) {
@@ -319,10 +350,102 @@
   }
   function runResumable() { return save.run && save.run.idx < save.run.queue.length; }
   // 재료 카드의 종류 태그: 고르기 전에도 어떤 재료인지 짐작할 수 있게 한다 (오답 재료도 같은 톤으로)
-  var INGR_TAG = { rice: '빵의 바탕', sbutter: '고소한 맛', milk: '촉촉한 재료', yeast: '부풀리는 재료', basil: '향긋한 허브', chestnut: '달콤한 열매' };
+  var INGR_TAG = { rice: '빵의 바탕', sbutter: '고소한 맛', milk: '촉촉한 재료', yeast: '부풀리는 재료', basil: '향긋한 허브', chestnut: '달콤한 열매', coffee: '쌉싸름한 향', choco: '달콤한 재료' };
+
+  /* ───────── 4-2) 출석·목표·난이도·인내심·팁 (v3) ───────── */
+  var pendingMsg = '';
+  function flushMsg() { if (pendingMsg) { toast(pendingMsg); pendingMsg = ''; } }
+  // 출석 스탬프: 날짜마다 하나. 모이면 잠긴 빵(UNLOCKS)이 저장 상태에서 열린다.
+  function stampAttend() {
+    var d = todayStr(), msgs = [];
+    if (save.attend.indexOf(d) < 0) {
+      save.attend.push(d);
+      msgs.push('오늘 출석 스탬프를 찍었어요! (' + Math.min(save.attend.length, ATTEND_GOAL) + '/' + ATTEND_GOAL + ')');
+    }
+    Object.keys(UNLOCKS).forEach(function (id) {
+      if (!save.unlocked[id] && save.attend.length >= UNLOCKS[id]) { save.unlocked[id] = true; msgs.push(breadById(id).name + '이(가) 도감에 열렸어요!'); }
+    });
+    if (msgs.length) { persist(); pendingMsg = msgs.join(' · '); }
+  }
+  function goalDef(id) { return GOALS.filter(function (g) { return g.id === id; })[0]; }
+  // 오늘의 목표: 날짜 키로 저장. 목록에서 날짜 해시로 고른다. 오래된 날짜 키는 정리한다.
+  function goalToday() {
+    var d = todayStr(), g = save.goals[d];
+    if (!g || !goalDef(g.id)) { g = save.goals[d] = { id: GOALS[hash(d + 'goal') % GOALS.length].id, prog: 0, done: false }; }
+    Object.keys(save.goals).sort().slice(0, -7).forEach(function (k) { delete save.goals[k]; });
+    return g;
+  }
+  // ev: { served, golden, tips, stars, calm, three } 중 이번 손님에서 생긴 만큼
+  function goalProgress(ev) {
+    var g = goalToday(), def = goalDef(g.id);
+    if (g.done) { return ''; }
+    g.prog = Math.min(def.n, g.prog + (ev[def.key] || 0));
+    if (g.prog >= def.n) { g.done = true; save.coins += GOAL_BONUS; return '오늘의 목표 달성! 보너스 🪙 ' + GOAL_BONUS; }
+    return '';
+  }
+  function coinChip() { return '<span class="chip" aria-label="코인">🪙 ' + save.coins + '</span>'; }
+
+  // 난이도 곡선: Day 1~2 넉넉 / Day 3부터 단골 손님이 엄격하고 굽기 구간이 조금 좁아짐 / Day 5부터 인내심이 빨리 줄어듦 / Day 7부터 러시
+  function diff(day) {
+    return { patSec: day >= 5 ? 80 : 100, bakeHalf: day >= 5 ? 0.11 : day >= 3 ? 0.13 : 0.15, strict: day >= 3, rush: day >= 7 };
+  }
+  // 굽기 '노릇한' 구간의 반폭: 날짜별 기본값 + 빠른 오븐 단계마다 조금씩 넓어짐
+  function bakeHalf() { return diff(save.run ? save.run.n : save.dayNo).bakeHalf + 0.03 * save.up.oven; }
+  function starsFor(total, strict) {
+    return strict ? (total >= 0.9 ? 3 : total >= 0.65 ? 2 : 1) : (total >= 0.82 ? 3 : total >= 0.55 ? 2 : 1);
+  }
+  // 팁: 별 × 3 × (0.5 + 남은 인내심). 단골 손님·러시는 각각 1.5배, 좋아하는 빵이면 보너스 6
+  function tipFor(stars, left, o) {
+    o = o || {};
+    var t = stars * 3 * (0.5 + left);
+    if (o.closer) { t *= 1.5; }
+    if (o.rush) { t *= 1.5; }
+    t = Math.round(t);
+    return o.usual ? t + 6 : t;
+  }
+  function stepStars(score) { return score > 0.85 ? 3 : score > 0.55 ? 2 : 1; }
+  function starTxt(n) { return '★'.repeat(n) + '☆'.repeat(3 - n); }
+  function miniStars(n) { return '<span class="ministars" aria-label="별 ' + n + '개">' + starTxt(n) + '</span>'; }
+
+  // 손님 인내심: 주문 화면부터 결과 직전까지 시간으로 서서히 줄어든다. 바닥나도 게임오버 없음(별·팁만 줄어듦).
+  var pat = null, patTimer = 0;
+  function patStop() { if (patTimer) { clearInterval(patTimer); patTimer = 0; } }
+  // waited: 러시에서 줄 서서 기다린 시간(초). 기다린 시간의 절반만큼 이미 지쳐 있다.
+  function patNew(waited) {
+    patStop();
+    var d = diff(save.run ? save.run.n : save.dayNo), sec = d.patSec * (1 + 0.15 * save.up.counter);
+    pat = { left: 1, sec: sec, last: Date.now(), spent: 0 };
+    if (d.rush && waited) { pat.left = clamp(1 - waited * 0.5 / sec, 0.25, 1); }
+    patTimer = setInterval(patTick, 250);
+  }
+  function patStep() {
+    if (!pat) { return; }
+    var now = Date.now(), dt = clamp((now - pat.last) / 1000, 0, 1);   // 탭이 가려져 시간이 튀어도 한 번에 크게 줄지 않게
+    pat.last = now; pat.spent += dt; pat.left = clamp(pat.left - dt / pat.sec, 0, 1);
+  }
+  function patTick() { patStep(); patUi(); }
+  function patUi() {
+    var f = $('#patfill'); if (!f || !pat) { return; }
+    var l = pat.left;
+    f.style.transform = 'scaleX(' + l + ')'; f.style.background = l > 0.5 ? '#4F8A4B' : l > 0.25 ? '#E0B040' : '#D9674F';
+    var face = $('#pface'); if (face) { face.textContent = l > 0.5 ? '😊' : l > 0.25 ? '😐' : l > 0 ? '😟' : '😢'; }
+  }
+  function patHtml() {
+    var can = save.sampleDay !== todayStr();
+    return '<div class="patrow"><span class="pface" id="pface">😊</span><div class="gauge pat" role="img" aria-label="손님 인내심"><i id="patfill"></i></div>' +
+      (can ? '<button class="btn sub mini" data-act="sample">🍪 시식 권유</button>' : '') + '</div>';
+  }
+  // 하루 한 번 무료: 빵 샘플을 건네며 손님을 달랜다
+  function sampleOffer(n) {
+    if (!pat || save.sampleDay === todayStr()) { return; }
+    patStep(); pat.left = clamp(pat.left + SAMPLE_GAIN, 0, 1); save.sampleDay = todayStr(); persist(); patUi();
+    if (n.parentNode) { n.parentNode.removeChild(n); }
+    SFX.star(); toast('시식 빵을 건넸어요! 손님이 한결 느긋해졌어요');
+  }
 
   /* ───────── 5) 화면들 ───────── */
   function showTitle() {
+    patStop();
     render(photoOr('scene-title', sceneTitle()),
       '<div class="topbar"><span></span>' + soundBtn() + '</div>' +
       '<div class="title-box plate"><h1>' + D.TEXT.gameTitle + '</h1><p>' + D.TEXT.gameSub + '</p></div>' +
@@ -334,49 +457,53 @@
       '<button class="btn sub block" data-act="settings">설정·안내</button></div>',
       function () {
         bindSound();
-        on('[data-act="resume"]', function () { noticeThen(function () { showOrder(); }); });
-        on('[data-act="open"]', function () { noticeThen(showHome); });
+        on('[data-act="resume"]', function () { showOrder(); });
+        on('[data-act="open"]', showHome);
         on('[data-act="settings"]', function () { showSettings(showTitle); });
-      });
-  }
-  // 첫 진입 때 '실제 레시피가 아니에요' 안내
-  function noticeThen(next) {
-    if (save.noticeSeen) { next(); return; }
-    modal('<h3>시작하기 전에</h3><p style="margin:0">' + D.TEXT.notice + '</p><p class="small" style="margin:0">' + D.TEXT.allergy + '</p><button class="btn block" data-act="ok">알겠어요</button>',
-      function (m, close) {
-        on('[data-act="ok"]', function () { save.noticeSeen = true; persist(); close(); next(); }, m);
+        flushMsg();
       });
   }
 
   function showHome() {
+    patStop(); stampAttend();
     var tb = todayBread(), q = buildQueue(), tc = custById(q[q.length - 1].c), date = todayStr();
-    var stampDone = save.stamps.indexOf(date) >= 0;
+    var stampDone = save.stamps.indexOf(date) >= 0, g = goalToday(), gd = goalDef(g.id), an = Math.min(save.attend.length, ATTEND_GOAL);
+    var attRow = '';
+    for (var ai = 0; ai < ATTEND_GOAL; ai++) { attRow += '<span class="stamp att ' + (ai < an ? 'on' : '') + '">' + (ai < an ? '🍞' : '') + '</span>'; }
+    var mocha = breadById('mocha-salt');
     render(photoOr('scene-home', sceneHome()),
-      '<div class="topbar"><span class="chip">🍞 ' + D.STORE.name + '</span><div class="row">' + soundBtn() + '</div></div>' +
+      '<div class="topbar"><span class="chip">🍞 ' + D.STORE.name + '</span><div class="row" style="align-items:center">' + coinChip() + soundBtn() + '</div></div>' +
       '<div class="panel" style="margin-top:8px">' + heartHtml() + '</div>' +
       '<div class="panel" style="margin-top:8px"><div class="row" style="align-items:center">' +
       '<div class="center">' + breadSvg(tb.art, 0.575, 84, 56) + '</div>' +
       '<div style="flex:2"><div class="small">오늘의 빵 · ' + dayLabel() + '</div><b>' + tb.name + '</b>' +
       '<div class="small">오늘의 단골 손님 · <b>' + tc.name + '</b></div>' +
-      '<div class="small">스탬프 ' + Math.min(save.stamps.length, STAMP_GOAL) + '/' + STAMP_GOAL + (stampDone ? ' · 오늘 도장 완료' : '') + (save.stamps.length >= STAMP_GOAL ? ' · 일주일 단골 배지' : '') + '</div></div></div>' +
+      '<div class="small">별 도장 ' + Math.min(save.stamps.length, STAMP_GOAL) + '/' + STAMP_GOAL + (stampDone ? ' · 오늘 도장 완료' : '') + (save.stamps.length >= STAMP_GOAL ? ' · 일주일 단골 배지' : '') + '</div></div></div>' +
       '<div class="small" style="margin-top:4px">' + D.TEXT.deviceDate + '</div></div>' +
+      '<div class="panel" id="goalbox" style="margin-top:8px"><div class="small">오늘의 목표</div><b>' + gd.text + '</b> ' +
+      (g.done ? '<span class="small">· 달성! 보너스 🪙 ' + GOAL_BONUS + '을 받았어요</span>' : '<span class="small">· ' + g.prog + '/' + gd.n + ' (보너스 🪙 ' + GOAL_BONUS + ')</span>') + '</div>' +
+      '<div class="panel" id="attbox" style="margin-top:8px"><b>출석 스탬프 ' + an + '/' + ATTEND_GOAL + '</b><span class="small"> · ' +
+      (isOpen(mocha) ? mocha.name + ' 열림!' : '하루에 하나, ' + (ATTEND_GOAL - an) + '개 더 모으면 ' + mocha.name + '이(가) 열려요') + '</span><div class="stamps">' + attRow + '</div></div>' +
       '<div class="spacer"></div>' +
       '<div class="stack">' + (runResumable()
         ? '<button class="btn green block" data-act="resume">이어서 하기 (손님 ' + (save.run.idx + 1) + '번째)</button>'
         : '<button class="btn block" data-act="start">Day ' + save.dayNo + ' 시작하기</button>') +
-      '<div class="row"><button class="btn sub" data-act="dex">📖 빵 도감</button><button class="btn sub" data-act="settings">⚙ 설정·안내</button></div></div>',
+      '<div class="row"><button class="btn sub" data-act="dex">📖 빵 도감</button><button class="btn sub" data-act="shop">🛒 작은 상점</button></div>' +
+      '<button class="btn sub block" data-act="settings">⚙ 설정·안내</button></div>',
       function () {
         bindSound();
         on('[data-act="start"]', showDayStart);
         on('[data-act="resume"]', function () { showOrder(); });
         on('[data-act="dex"]', function () { showDex(showHome); });
+        on('[data-act="shop"]', function () { showShop(showHome); });
         on('[data-act="settings"]', function () { showSettings(showHome); });
+        flushMsg();
       });
   }
 
   // Day 소개: 실제로 오는 손님 순서(큐)를 그대로 보여준다. 첫 손님이 주문 화면의 첫 손님과 같다.
   function showDayStart() {
-    var tb = todayBread(), q = buildQueue(), first = custById(q[0].c), fb = breadById(q[0].b);
+    var tb = todayBread(), q = buildQueue(), first = custById(q[0].c), fb = breadById(q[0].b), df = diff(save.dayNo);
     render(sceneSoft(),
       '<div class="topbar"><button class="icon-btn" data-act="back" aria-label="뒤로">←</button><span></span></div>' +
       '<div class="spacer"></div>' +
@@ -387,9 +514,11 @@
       '<div class="small" style="margin-top:8px">오늘 찾아올 손님</div>' +
       '<div class="row" style="justify-content:center;gap:6px">' + q.map(function (e, i) {
         var c = custById(e.c);
-        return '<div class="center" style="flex:1"><div>' + avatar(c, 2, 84) + '</div><div class="small">' + (i + 1) + '. ' + (e.closer ? '단골 손님' : c.name) + '</div></div>';
+        return '<div class="center" style="flex:1"><div>' + avatar(c, 2, 84) + '</div><div class="small">' + (i + 1) + '. ' + (e.closer ? '단골 손님' : c.name) + (e.usual ? ' 💛' : '') + '</div></div>';
       }).join('') + '</div>' +
-      '<p class="small" style="margin:8px 0 0">오늘의 빵을 별 3개로 만들면 스탬프를 한 개 받아요. 손님은 ' + RUN_LEN + '명이 와요.</p></div>' +
+      '<p class="small" style="margin:8px 0 0">오늘의 빵을 별 3개로 만들면 별 도장을 한 개 받아요. 손님은 ' + RUN_LEN + '명이 와요. 💛는 좋아하는 빵을 주문하는 손님이에요.</p>' +
+      '<p class="small" style="margin:4px 0 0"><b>손님은 기다리는 동안 조금씩 지쳐요.</b> 빨리 내줄수록 팁이 많아요.' +
+      (df.rush ? ' 오늘은 러시! 손님이 연달아 와요. 대신 팁이 많아요.' : df.strict ? ' 마지막 단골 손님은 까다롭지만 팁이 많아요.' : '') + '</p></div>' +
       '<div class="spacer"></div><button class="btn block" data-act="open">문 열기</button>',
       function () {
         on('[data-act="back"]', showHome);
@@ -401,17 +530,23 @@
   function buildQueue() {
     var date = todayStr(), open = openBreads(), runs = save.runsToday[date] || 0;
     var closer = D.CUSTOMERS[(hash(date + 'cust') + runs) % D.CUSTOMERS.length];
-    var closerBread = open[(hash(date + 'bread') + runs) % open.length];
     var others = D.CUSTOMERS.filter(function (c) { return c.id !== closer.id; });
     var shift = save.dayNo % others.length, q = [];
-    for (var i = 0; i < RUN_LEN - 1; i++) {
-      q.push({ c: others[(shift + i) % others.length].id, b: open[(save.dayNo + i) % open.length].id, hint: true, closer: false });
+    // 좋아하는 빵이 열려 있으면 절반쯤은 그 빵을 주문한다(늘 먹던 것). 아니면 순서대로.
+    function pick(c, fallback, tag) {
+      var fav = breadById(c.fav);
+      return fav && isOpen(fav) && hash(date + c.id + tag + save.dayNo + runs) % 2 === 0 ? fav : fallback;
     }
-    q.push({ c: closer.id, b: closerBread.id, hint: false, closer: true });
+    for (var i = 0; i < RUN_LEN - 1; i++) {
+      var oc = others[(shift + i) % others.length], ob = pick(oc, open[(save.dayNo + i) % open.length], 'usual');
+      q.push({ c: oc.id, b: ob.id, hint: true, closer: false, usual: ob.id === oc.fav });
+    }
+    var cb = pick(closer, open[(hash(date + 'bread') + runs) % open.length], 'closer');
+    q.push({ c: closer.id, b: cb.id, hint: false, closer: true, usual: cb.id === closer.fav });
     return q;
   }
   function startRun() {
-    save.run = { n: save.dayNo, date: todayStr(), queue: buildQueue(), idx: 0, results: [] };
+    save.run = { n: save.dayNo, date: todayStr(), queue: buildQueue(), idx: 0, results: [], waited: 0 };
     persist();
   }
 
@@ -420,10 +555,13 @@
     var run = save.run; if (!run) { showHome(); return; }
     var qi = run.queue[run.idx], c = custById(qi.c), b = breadById(qi.b);
     cur = { c: c, b: b, q: qi, pickMiss: 0, ingWrong: 0, sc: {}, ai: 0, applied: false };
+    patNew(run.waited || 0);
+    var rush = diff(run.n).rush;
     var wish = b.wish[hash(run.date + b.id + c.id + run.idx) % b.wish.length];
     render(photoOr('scene-order', sceneOrder()),
-      '<div class="topbar"><span class="chip">손님 ' + (run.idx + 1) + '/' + RUN_LEN + (qi.closer ? ' · 단골 손님' : '') + '</span>' + soundBtn() + '</div>' +
+      '<div class="topbar"><span class="chip">손님 ' + (run.idx + 1) + '/' + RUN_LEN + (qi.closer ? ' · 단골 손님' : '') + (rush ? ' · 러시' : '') + '</span>' + coinChip() + soundBtn() + '</div>' + patHtml() +
       '<div class="bubble" style="margin-top:10px"><div class="small">' + c.greet + '</div><div id="orderTxt">' + c.order.replace('{wish}', wish) + '</div>' +
+      (qi.usual ? '<div class="hintline">💛 늘 먹던 걸로 주세요</div>' : '') +
       (qi.hint ? '<div class="hintline">힌트: ' + b.hint + '</div>' : '') + '</div>' +
       '<div class="customer-wrap" style="margin-top:14px">' + avatar(c, 2, 220) + '</div>' +
       '<div class="spacer"></div>' +
@@ -457,7 +595,7 @@
       .sort(function (p, q) { return hash(b.id + p.x.id) - hash(b.id + q.x.id); });
     var got = 0;
     render(photoOr('scene-bake', sceneBake()),
-      '<div class="topbar"><span class="chip">' + b.name + '</span>' + soundBtn() + '</div>' + stepbar('ing') +
+      '<div class="topbar"><span class="chip">' + b.name + '</span>' + soundBtn() + '</div>' + patHtml() + stepbar('ing') +
       '<div class="panel" style="margin-top:8px"><b>재료 카드를 골라 주세요</b><div class="small">이 빵에 어울리는 재료만 골라요. 카드를 누르면 이유가 보여요.</div></div>' +
       '<div class="cards" style="margin-top:10px">' + cards.map(function (c) {
         return '<button class="icard" data-i="' + c.x.id + '" data-ok="' + (c.ok ? 1 : 0) + '"><span class="ic">' + c.x.icon + '</span><span class="n">' + c.x.name + '</span>' +
@@ -486,7 +624,7 @@
   function showMake() {
     var key = cur.b.actions[cur.ai], labels = { knead: '반죽 치대기', shape: '모양 잡기', bake: '굽기' };
     render(photoOr('scene-bake', sceneBake()),
-      '<div class="topbar"><span class="chip">' + cur.b.name + ' · ' + labels[key] + '</span>' + soundBtn() + '</div>' + stepbar(key) +
+      '<div class="topbar"><span class="chip">' + cur.b.name + ' · ' + labels[key] + '</span>' + soundBtn() + '</div>' + patHtml() + stepbar(key) +
       '<div id="mini" style="display:flex;flex-direction:column;flex:1;min-height:0;margin-top:8px"></div>',
       function () {
         bindSound();
@@ -583,10 +721,10 @@
       if (g < 0.08) { say.textContent = '먼저 원을 따라 문질러 주세요'; return; }
       locked = true; this.disabled = true;
       var W = D.WORDS.knead, d = g < Z0 ? Z0 - g : g > Z1 ? g - Z1 : 0;
-      var score = d === 0 ? 1 : clamp(1 - d / 0.45, 0.25, 0.9);
+      var score = d === 0 ? 1 : clamp(1 - d / 0.45, 0.25, 0.84), st = stepStars(score);
       var word = d === 0 ? W.hi : g < Z0 ? W.low : W.over;
-      say.textContent = word; if (d === 0) { SFX.star(); }
-      setTimeout(function () { done({ score: score, word: word }); }, 1000);
+      say.textContent = word + ' ' + starTxt(st); if (d === 0) { SFX.star(); }
+      setTimeout(function () { done({ score: score, word: word, stars: st }); }, 1000);
     });
   }
 
@@ -623,9 +761,9 @@
       if (!moved) { say.textContent = '먼저 끝을 잡고 길게 늘려 주세요'; return; }
       locked = true; this.disabled = true;
       var d = Math.abs(L - TL), score = d <= 14 ? 1 : clamp(1 - (d - 14) / 110, 0.25, 1), W = D.WORDS.shape;
-      var word = score > 0.85 ? W.hi : score > 0.55 ? W.mid : W.low;
-      say.textContent = word; if (score > 0.85) { SFX.star(); }
-      setTimeout(function () { done({ score: score, word: word }); }, 1000);
+      var word = score > 0.85 ? W.hi : score > 0.55 ? W.mid : W.low, st = stepStars(score);
+      say.textContent = word + ' ' + starTxt(st); if (score > 0.85) { SFX.star(); }
+      setTimeout(function () { done({ score: score, word: word, stars: st }); }, 1000);
     });
   }
   function shapePan(root, done) {
@@ -654,9 +792,9 @@
       if (!moved) { say.textContent = '먼저 반죽을 끌어서 틀로 옮겨 주세요'; return; }
       locked = true; this.disabled = true;
       var d = Math.hypot(cx - 170, cy - 210), score = d <= 16 ? 1 : clamp(1 - (d - 16) / 130, 0.25, 1), W = D.WORDS.shape;
-      var word = score > 0.85 ? W.hi : score > 0.55 ? W.mid : W.low;
-      say.textContent = word; if (score > 0.85) { SFX.star(); }
-      setTimeout(function () { done({ score: score, word: word }); }, 1000);
+      var word = score > 0.85 ? W.hi : score > 0.55 ? W.mid : W.low, st = stepStars(score);
+      say.textContent = word + ' ' + starTxt(st); if (score > 0.85) { SFX.star(); }
+      setTimeout(function () { done({ score: score, word: word, stars: st }); }, 1000);
     });
   }
 
@@ -678,8 +816,8 @@
       '<div class="meterwrap"><div class="zone-label" id="zl">노릇한 구간</div><div class="bakebar" id="bar"><div class="zone" id="zn"></div><div class="needle" id="nd"></div></div></div>' +
       '<div style="height:10px"></div>' + actionBtn('꺼내기!');
     var bk = $('#bk', root), bar = $('#bar', root), zn = $('#zn', root), zl = $('#zl', root), nd = $('#nd', root), say = $('#say', root), smell = $('#smell', root), live = $('#live', root);
-    var G0 = 0.42, G1 = 0.72, MID = 0.57, HALF = 0.15, t = 0, running = true, raf = 0, start = performance.now(), lastTick = 0, lastSmell = '', lastLive = '';
-    var SWEEP = 5200;   // 바늘이 한 번 왕복하는 연출 속도(요리 시간과 무관)
+    var MID = 0.57, HALF = bakeHalf(), G0 = MID - HALF, G1 = MID + HALF, t = 0, running = true, raf = 0, start = performance.now(), lastTick = 0, lastSmell = '', lastLive = '';
+    var SWEEP = 5200;   // 바늘이 한 번 왕복하는 연출 속도(요리 시간과 무관). 노릇한 구간의 너비는 날짜와 상점 오븐이 정한다.
     function layout() {
       var w = bar.clientWidth;
       zn.style.left = (w * G0) + 'px'; zn.style.width = (w * (G1 - G0)) + 'px';
@@ -705,16 +843,16 @@
     $('#go', root).addEventListener('click', function () {
       if (!running) { return; }
       running = false; cancelAnimationFrame(raf); this.disabled = true; SFX.ding();
-      var d = Math.abs(t - MID), score = d <= HALF ? 1 : clamp(1 - (d - HALF) / 0.4, 0.25, 0.9), W = D.WORDS.bake;
+      var d = Math.abs(t - MID), score = d <= HALF ? 1 : clamp(1 - (d - HALF) / 0.4, 0.25, 0.84), W = D.WORDS.bake, st = stepStars(score);
       var word = d <= HALF ? W.hi : t < MID ? W.early : W.late;
-      say.textContent = '띵! ' + word; smell.textContent = ''; live.textContent = word;
-      setTimeout(function () { done({ score: score, word: word, tone: t }); }, 1200);
+      say.textContent = '띵! ' + word + ' ' + starTxt(st); smell.textContent = ''; live.textContent = word;
+      setTimeout(function () { done({ score: score, word: word, tone: t, stars: st, hit: d <= HALF }); }, 1200);
     });
   }
 
   /* ───────── 채점·결과 ───────── */
   // 단계마다 점수와 말을 따로 보여 준다(평균 문구로 뭉개지 않는다)
-  function scoreCurrent() {
+  function scoreCurrent(strict) {
     var ingScore = clamp(1 - 0.34 * cur.ingWrong, 0.3, 1);
     var hands = [], sc = cur.sc;
     ['knead', 'shape'].forEach(function (k) { if (sc[k]) { hands.push(sc[k].score); } });
@@ -722,36 +860,55 @@
     var bake = sc.bake ? sc.bake.score : 1;
     var total = (ingScore + hand + bake) / 3;
     return {
-      stars: total >= 0.82 ? 3 : total >= 0.55 ? 2 : 1, total: total,
-      ingWord: D.WORDS.ingredient[cur.ingWrong === 0 ? 0 : cur.ingWrong === 1 ? 1 : 2],
+      stars: starsFor(total, strict), total: total,
+      ingWord: D.WORDS.ingredient[cur.ingWrong === 0 ? 0 : cur.ingWrong === 1 ? 1 : 2], ingStars: cur.ingWrong === 0 ? 3 : cur.ingWrong === 1 ? 2 : 1,
       kneadWord: sc.knead ? sc.knead.word : '', shapeWord: sc.shape ? sc.shape.word : '',
-      bakeWord: sc.bake ? sc.bake.word : '', tone: sc.bake ? sc.bake.tone : 0.575
+      bakeWord: sc.bake ? sc.bake.word : '', tone: sc.bake ? sc.bake.tone : 0.575,
+      kneadStars: sc.knead ? sc.knead.stars : 0, shapeStars: sc.shape ? sc.shape.stars : 0, bakeStars: sc.bake ? sc.bake.stars : 0
     };
   }
   function showResult() {
-    var r = scoreCurrent(), c = cur.c, b = cur.b, run = save.run, date = todayStr(), stampMsg = '';
+    var c = cur.c, b = cur.b, run = save.run, date = todayStr(), stampMsg = '', r = cur.r, notes = [];
     if (!cur.applied) {
       cur.applied = true;
-      save.stars += r.stars; save.heart += r.stars;
+      patStep(); patStop();
+      var d = diff(run.n), left = pat ? pat.left : 1, emptied = left <= 0.001;
+      r = cur.r = scoreCurrent(d.strict && cur.q.closer);
+      // 인내심이 바닥났어도 게임오버는 없다. 별이 하나 줄고 팁이 적어질 뿐.
+      if (emptied && r.stars > 1) { r.stars--; }
+      r.emptied = emptied;
+      r.tip = tipFor(r.stars, left, { closer: cur.q.closer, rush: d.rush, usual: !!cur.q.usual });
+      run.waited = (run.waited || 0) + (pat ? pat.spent : 0);
+      save.stars += r.stars; save.heart += r.stars; save.coins += r.tip;
       var e = save.dex[b.id] || { made: 0, best: 0 }; e.made++; e.best = Math.max(e.best, r.stars); save.dex[b.id] = e;
-      run.results.push({ b: b.id, c: c.id, stars: r.stars, line: c.reaction[r.stars] });
+      run.results.push({ b: b.id, c: c.id, stars: r.stars, line: c.reaction[r.stars], tip: r.tip });
       run.idx++;
-      if (b.id === todayBread().id && r.stars === 3 && save.stamps.indexOf(date) < 0) { save.stamps.push(date); stampMsg = '오늘의 빵 별 3개! 스탬프를 한 개 받았어요.'; }
+      if (b.id === todayBread().id && r.stars === 3 && save.stamps.indexOf(date) < 0) { save.stamps.push(date); stampMsg = '오늘의 빵 별 3개! 별 도장을 한 개 받았어요.'; }
+      r.stampMsg = stampMsg;
+      r.goalMsg = goalProgress({ served: 1, golden: cur.sc.bake && cur.sc.bake.hit ? 1 : 0, tips: r.tip, stars: r.stars, calm: left >= 0.5 ? 1 : 0, three: r.stars === 3 ? 1 : 0 });
       persist();
     }
+    stampMsg = r.stampMsg;
+    if (r.emptied) { notes.push('손님이 오래 기다려서 별이 하나 줄었어요'); }
+    if (cur.q.usual) { notes.push('💛 좋아하는 빵이라 보너스 팁이 붙었어요'); }
+    if (cur.q.closer) { notes.push('단골 손님이라 팁이 많아요'); }
+    if (diff(run.n).rush) { notes.push('러시라서 팁이 많아요'); }
     var last = run.idx >= RUN_LEN;
     render(photoOr('scene-order', sceneOrder()),
-      '<div class="topbar"><span class="chip">' + b.name + '</span>' + soundBtn() + '</div>' +
+      '<div class="topbar"><span class="chip">' + b.name + '</span>' + coinChip() + soundBtn() + '</div>' +
       '<div class="bubble pop" style="margin-top:10px">' + c.reaction[r.stars] + '</div>' +
       '<div class="spacer"></div>' +
       '<div class="customer-wrap" style="margin-bottom:-22px">' + avatar(c, r.stars, 190) + '</div>' +
       '<div class="panel center pop" style="z-index:1"><div>' + breadSvg(b.art, r.tone, 96, 64) + '</div>' + starsHtml(r.stars) +
       '<div class="axes" style="margin-top:6px;text-align:left">' +
-      '<div class="axis"><b>재료</b>' + r.ingWord + '</div>' +
-      (r.kneadWord ? '<div class="axis"><b>반죽</b>' + r.kneadWord + '</div>' : '') +
-      (r.shapeWord ? '<div class="axis"><b>성형</b>' + r.shapeWord + '</div>' : '') +
-      (r.bakeWord ? '<div class="axis"><b>굽기</b>' + r.bakeWord + '</div>' : '') + '</div>' +
-      '<div class="small" style="margin-top:6px">단골 마음이 올랐어요' + (stampMsg ? ' · ' + stampMsg : '') + '</div></div>' +
+      '<div class="axis"><b>재료</b>' + r.ingWord + ' ' + miniStars(r.ingStars) + '</div>' +
+      (r.kneadWord ? '<div class="axis"><b>반죽</b>' + r.kneadWord + ' ' + miniStars(r.kneadStars) + '</div>' : '') +
+      (r.shapeWord ? '<div class="axis"><b>성형</b>' + r.shapeWord + ' ' + miniStars(r.shapeStars) + '</div>' : '') +
+      (r.bakeWord ? '<div class="axis"><b>굽기</b>' + r.bakeWord + ' ' + miniStars(r.bakeStars) + '</div>' : '') + '</div>' +
+      '<div class="tipline" id="tipline">🪙 팁 +' + r.tip + '</div>' +
+      (notes.length ? '<div class="small">' + notes.join(' · ') + '</div>' : '') +
+      '<div class="small" style="margin-top:4px">단골 마음이 올랐어요' + (stampMsg ? ' · ' + stampMsg : '') + '</div>' +
+      (r.goalMsg ? '<div class="small goalmsg"><b>' + r.goalMsg + '</b></div>' : '') + '</div>' +
       '<div style="height:10px"></div><button class="btn block" id="next">' + (last ? '하루 마무리하기' : '다음 손님 맞이하기') + '</button>',
       function () {
         bindSound(); SFX.star();
@@ -761,6 +918,7 @@
 
   /* 하루 정산 */
   function showSettle() {
+    patStop();
     var run = save.run;
     if (run) {
       save.lastDay = { n: run.n, date: run.date, results: run.results };
@@ -768,17 +926,20 @@
       save.dayNo = run.n + 1; save.run = null; persist();
     }
     var day = save.lastDay, sum = day.results.reduce(function (a, r) { return a + r.stars; }, 0);
-    var locked = D.BREADS.filter(function (b) { return !b.open; }).length;
+    var tips = day.results.reduce(function (a, r) { return a + (r.tip || 0); }, 0), gl = goalToday(), gdef = goalDef(gl.id);
+    var locked = D.BREADS.filter(function (b) { return !isOpen(b); }).length;
     var stampN = Math.min(save.stamps.length, STAMP_GOAL), stampRow = '', earned = save.stamps.indexOf(day.date) >= 0;
     for (var si = 0; si < STAMP_GOAL; si++) { stampRow += '<span class="stamp ' + (si < stampN ? 'on' : '') + '">' + (si < stampN ? '🍞' : '') + '</span>'; }
     var nb = breadOn(tomorrowStr());
     render(sceneSoft(),
-      '<div class="topbar"><span class="chip">Day ' + day.n + ' 마감</span>' + soundBtn() + '</div>' +
+      '<div class="topbar"><span class="chip">Day ' + day.n + ' 마감</span>' + coinChip() + soundBtn() + '</div>' +
       '<div class="panel" style="margin-top:8px"><h2>오늘도 수고했어요</h2>' +
-      '<div class="summary"><div class="num">' + sum + '</div><div><b>오늘의 별 ★</b><div class="small">손님 ' + day.results.length + '명 · 지금까지 별 ' + save.stars + '개</div></div></div>' +
-      '<div class="list" style="margin-top:6px">' + day.results.map(function (r) { var b = breadById(r.b), c = custById(r.c); return '<div class="li"><span>' + b.name + ' · ' + c.name + '</span>' + starsHtml(r.stars).replace('class="stars"', 'class="stars" style="font-size:20px"') + '</div>'; }).join('') + '</div></div>' +
+      '<div class="summary"><div class="num">' + sum + '</div><div><b>오늘의 별 ★</b><div class="small">손님 ' + day.results.length + '명 · 지금까지 별 ' + save.stars + '개</div>' +
+      '<div class="small" id="settleCoin"><b>오늘 받은 팁 🪙 ' + tips + '</b> · 가진 코인 🪙 ' + save.coins + '</div></div></div>' +
+      '<div class="list" style="margin-top:6px">' + day.results.map(function (r) { var b = breadById(r.b), c = custById(r.c); return '<div class="li"><span>' + b.name + ' · ' + c.name + (r.tip ? ' · 🪙 ' + r.tip : '') + '</span>' + starsHtml(r.stars).replace('class="stars"', 'class="stars" style="font-size:20px"') + '</div>'; }).join('') + '</div></div>' +
       '<div class="panel" style="margin-top:8px">' + heartHtml() + '</div>' +
-      '<div class="panel" style="margin-top:8px"><b>스탬프 ' + stampN + '/' + STAMP_GOAL + '</b><span class="small"> · ' + (earned ? '오늘 도장을 받았어요' : '오늘의 빵을 별 3개로 만들면 받아요') + '</span><div class="stamps">' + stampRow + '</div></div>' +
+      '<div class="panel" style="margin-top:8px"><b>별 도장 ' + stampN + '/' + STAMP_GOAL + '</b><span class="small"> · ' + (earned ? '오늘 도장을 받았어요' : '오늘의 빵을 별 3개로 만들면 받아요') + '</span><div class="stamps">' + stampRow + '</div>' +
+      '<div class="small" style="margin-top:4px">오늘의 목표 · ' + gdef.text + ' · ' + (gl.done ? '달성!' : gl.prog + '/' + gdef.n) + '</div></div>' +
       '<div class="panel" style="margin-top:8px"><b>내일 예고</b><div class="preview"><div>' + breadSvg(nb.art, 0.575, 84, 56) + '</div>' +
       '<div><b>내일의 빵 · ' + nb.name + '</b><div class="small">내일도 새로운 손님이 찾아와요. 아직 잠긴 빵 ' + locked + '종은 곧 만나요.</div></div></div></div>' +
       '<div class="spacer"></div><div class="stack"><button class="btn green block" id="card">결과 카드 이미지 저장</button><button class="btn block" id="home">매장 홈으로</button></div>',
@@ -836,15 +997,42 @@
     }, 'image/png');
   }
 
+  /* 작은 상점: 코인으로 딱 2가지를 단계별로 산다 */
+  function showShop(back) {
+    var items = Object.keys(SHOP).map(function (k) {
+      var it = SHOP[k], lv = save.up[k], maxed = lv >= it.price.length, price = maxed ? 0 : it.price[lv], can = !maxed && save.coins >= price;
+      return '<div class="panel shopitem"><div class="row" style="align-items:center"><div class="ic" style="font-size:34px;flex:none">' + it.icon + '</div>' +
+        '<div style="flex:1"><b>' + it.name + '</b> <span class="small">' + lv + '/' + it.price.length + '단계</span><div class="small">' + it.desc + '</div></div></div>' +
+        '<button class="btn block ' + (can ? '' : 'sub') + '" data-buy="' + k + '" ' + (can ? '' : 'disabled') + '>' +
+        (maxed ? '모두 갖췄어요' : can ? '사기 🪙 ' + price : '🪙 ' + price + ' 필요해요') + '</button></div>';
+    }).join('');
+    render(sceneSoft(),
+      '<div class="topbar"><button class="icon-btn" data-act="back" aria-label="뒤로">←</button><span class="chip">🛒 작은 상점</span>' + coinChip() + '</div>' +
+      '<div class="scroll" style="margin-top:10px">' + items +
+      '<div class="panel small">코인은 손님에게 받는 팁이에요. 게임 안에서만 쓰는 코인이고, 실제 돈과는 상관없어요.</div></div>',
+      function () {
+        on('[data-act="back"]', back);
+        on('[data-buy]', function (n) {
+          var k = n.getAttribute('data-buy'), it = SHOP[k], lv = save.up[k];
+          if (lv >= it.price.length || save.coins < it.price[lv]) { SFX.wrong(); return; }
+          save.coins -= it.price[lv]; save.up[k] = lv + 1; persist(); SFX.star();
+          showShop(back); toast(it.name + ' ' + (lv + 1) + '단계가 됐어요!');
+        });
+      });
+  }
+
   /* 도감 */
   function showDex(back) {
-    var openN = openBreads().length;
+    var openN = openBreads().length, mocha = breadById('mocha-salt');
     render(sceneSoft(),
       '<div class="topbar"><button class="icon-btn" data-act="back" aria-label="뒤로">←</button><span class="chip">📖 모아모아 빵 도감 ' + openN + '/' + D.BREADS.length + '</span>' + soundBtn() + '</div>' +
       '<div class="scroll" style="margin-top:10px">' + D.CATS.map(function (cat) {
         var items = D.BREADS.filter(function (b) { return b.cat === cat.id; });
         return '<div class="catname">' + cat.name + '</div><div class="dexgrid">' + items.map(function (b) {
-          if (!b.open) { return '<div class="dcard locked">' + silhouette(b.cat) + '<span>' + b.name + '</span><span class="small">🔒 곧 만나요</span></div>'; }
+          if (!isOpen(b)) {
+            return '<div class="dcard locked">' + silhouette(b.cat) + '<span>' + b.name + '</span><span class="small">' +
+              (UNLOCKS[b.id] ? '🔒 출석 스탬프 ' + Math.min(save.attend.length, UNLOCKS[b.id]) + '/' + UNLOCKS[b.id] : '🔒 곧 만나요') + '</span></div>';
+          }
           var e = save.dex[b.id];
           return '<button class="dcard" data-b="' + b.id + '">' + breadSvg(b.art, 0.575, 72, 48) + '<span>' + b.name + '</span><span class="small">' + (e ? '별 기록 ' + '★'.repeat(e.best) : '아직 안 만들었어요') + '</span></button>';
         }).join('') + '</div>';
@@ -890,6 +1078,12 @@
   }
 
   /* ───────── 7) 시작 ───────── */
-  window.__moamoa = { save: function () { return save; }, show: { title: showTitle, home: showHome } }; // 점검용
+  // 점검용 노출(테스트가 쓴다)
+  window.__moamoa = {
+    save: function () { return save; }, pat: function () { return pat; }, diff: diff, bakeHalf: bakeHalf, tipFor: tipFor, starsFor: starsFor,
+    buildQueue: buildQueue, goalToday: goalToday, isOpen: isOpen, todayStr: todayStr,
+    show: { title: showTitle, home: showHome, order: showOrder, shop: showShop }
+  };
+  stampAttend();
   showTitle();
 })();
