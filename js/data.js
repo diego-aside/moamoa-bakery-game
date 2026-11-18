@@ -27,7 +27,7 @@
   var BREADS = [
     {
       id: 'rice-salt', cat: 'salt', name: '쌀소금빵', open: true,
-      desc: '겉은 바삭, 속은 쫄깃한 쌀소금빵이에요.',
+      desc: '겉은 바삭, 속은 쫄깃해요.',
       wish: ['겉은 바삭하고 속은 쫄깃한 빵 있어요?', '짭조름하고 고소한 빵이 당겨요.'],
       hint: '쌀소금빵',
       actions: ['shape', 'bake'], shapeKind: 'stretch', art: 'saltbread',
@@ -41,7 +41,7 @@
     },
     {
       id: 'rice-loaf', cat: 'loaf', name: '쌀식빵(아기쌀식빵)', open: true,
-      desc: '부드럽게 씹히는 쌀식빵이에요.',
+      desc: '부드럽게 씹혀요.',
       wish: ['아이가 먹을 거라 부드러운 빵이면 좋겠어요.', '폭신하게 씹히는 빵으로 주세요.'],
       hint: '쌀식빵',
       actions: ['knead', 'shape', 'bake'], shapeKind: 'pan', art: 'loaf',
